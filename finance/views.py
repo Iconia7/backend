@@ -13,21 +13,47 @@ from decimal import Decimal
 
 from .models import Goal, Transaction, Product, User, Order
 from .serializers import (
-    GoalSerializer, TransactionSerializer, ProductSerializer, 
+    GoalCreateSerializer, GoalSerializer, TransactionSerializer, ProductSerializer, 
     OrderCreateSerializer, OrderSerializer
 )
 from .mpesa_utils import get_mpesa_access_token, initiate_stk_push
 
 # --- GoalListCreateView (No Change) ---
 class GoalListCreateView(ListCreateAPIView):
-    serializer_class = GoalSerializer
     permission_classes = [IsAuthenticated]
+    
+    # Serializer for GET (listing)
+    serializer_class = GoalSerializer 
 
     def get_queryset(self):
         return Goal.objects.filter(owner=self.request.user)
 
     def perform_create(self, serializer):
+        # This part is unchanged
         serializer.save(owner=self.request.user)
+
+    def get_serializer_class(self):
+        # When we are CREATING (POST), use the Create serializer
+        if self.request.method == 'POST':
+            return GoalCreateSerializer
+        # Otherwise (GET), use the default List serializer
+        return super().get_serializer_class()
+    
+    # --- THIS IS THE NEW, CRITICAL METHOD ---
+    def create(self, request, *args, **kwargs):
+        # 1. Use the GoalCreateSerializer for INCOMING data
+        create_serializer = self.get_serializer(data=request.data)
+        create_serializer.is_valid(raise_exception=True)
+        
+        # 2. Save the new object
+        self.perform_create(create_serializer)
+        
+        # 3. Use the FULL GoalSerializer for OUTGOING data
+        # We serialize the 'instance' that was just created
+        response_serializer = GoalSerializer(create_serializer.instance)
+        
+        headers = self.get_success_headers(response_serializer.data)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)    
 
 class OrderListView(ListAPIView):
     """
@@ -271,6 +297,10 @@ class OrderCreateView(CreateAPIView):
                 down_payment=down_payment,
                 amount_financed=amount_financed
             )
-        output_serializer = self.get_serializer(order)
+            User.objects.filter(id=user.id).update(
+                koin_score = F('koin_score') - product.required_koin_score
+            )
+            user.refresh_from_db()
+        output_serializer = OrderSerializer(order)
         headers = self.get_success_headers(output_serializer.data)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
