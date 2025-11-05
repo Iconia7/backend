@@ -12,6 +12,8 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from decimal import Decimal
+from .permissions import IsOwner # <-- IMPORT THIS
+from rest_framework.generics import RetrieveUpdateDestroyAPIView
 
 from .models import Goal, Transaction, Product, User, Order
 from .serializers import (
@@ -41,7 +43,17 @@ class GoalListCreateView(ListCreateAPIView):
         response_serializer = GoalSerializer(create_serializer.instance)
         headers = self.get_success_headers(response_serializer.data)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-
+class GoalDetailView(RetrieveUpdateDestroyAPIView):
+    """
+    Handles retrieving, updating, and deleting a single goal.
+    """
+    queryset = Goal.objects.all()
+    serializer_class = GoalSerializer
+    # --- Use BOTH permissions ---
+    # 1. Must be logged in
+    # 2. Must be the owner of this goal
+    permission_classes = [IsAuthenticated, IsOwner]
+    
 # --- OrderListView (Unchanged) ---
 class OrderListView(ListAPIView):
     # ... (code is the same)

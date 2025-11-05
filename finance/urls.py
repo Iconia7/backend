@@ -1,10 +1,11 @@
 # finance/urls.py
 
 from django.urls import path
-from .views import GoalListCreateView, DepositView, OrderListView, PaymentCallbackView, RepayView, TransactionListView, ProductListView,OrderCreateView
+from .views import GoalDetailView, GoalListCreateView, DepositView, OrderListView, PaymentCallbackView, RepayView, TransactionListView, ProductListView,OrderCreateView
 
 urlpatterns = [
     path('goals/', GoalListCreateView.as_view(), name='goal-list-create'),
+    path('goals/<int:pk>/', GoalDetailView.as_view(), name='goal-detail'),
     path('deposit/', DepositView.as_view(), name='deposit'),
     path('payment-callback/', PaymentCallbackView.as_view(), name='payment-callback'),
     path('transactions/', TransactionListView.as_view(), name='transaction-list'),
