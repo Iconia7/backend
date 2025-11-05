@@ -1,7 +1,7 @@
 # finance/management/commands/register_urls.py
 
 from django.core.management.base import BaseCommand
-from finance.mpesa_utils import register_mpesa_urls
+from finance.payhero_utils import register_mpesa_urls
 
 class Command(BaseCommand):
     help = 'Registers the M-Pesa Confirmation and Validation URLs with Daraja'
