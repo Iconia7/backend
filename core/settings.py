@@ -36,6 +36,7 @@ ALLOWED_HOSTS = ['localhost','127.0.0.1','192.168.27.190','10.39.40.211','192.16
 INSTALLED_APPS = [
     'users',
     'rest_framework',
+    'corsheaders',
     'finance',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -47,6 +48,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -132,3 +134,6 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     )
 }
+
+# Allow all hosts to make requests
+CORS_ALLOW_ALL_ORIGINS = True
