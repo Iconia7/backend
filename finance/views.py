@@ -21,35 +21,45 @@ from .serializers import (
 )
 from .payhero_utils import initiate_payhero_push
 
-# --- GoalListCreateView (Correct) ---
+# --- GoalListCreateView (FIXED) ---
 class GoalListCreateView(ListCreateAPIView):
     permission_classes = [IsAuthenticated]
+    
+    # By default, use the FULL serializer for GET requests
     serializer_class = GoalSerializer 
+
     def get_queryset(self):
         return Goal.objects.filter(owner=self.request.user)
+
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+
     def get_serializer_class(self):
+        # When we are CREATING (POST), use the simple Create serializer
         if self.request.method == 'POST':
             return GoalCreateSerializer
+        # Otherwise (GET), use the default full GoalSerializer
         return super().get_serializer_class()
+    
     def create(self, request, *args, **kwargs):
+        # Use the 'create' serializer for INCOMING data
         create_serializer = self.get_serializer(data=request.data)
         create_serializer.is_valid(raise_exception=True)
         self.perform_create(create_serializer)
+        
+        # Use the 'list' serializer for the OUTGOING response
         response_serializer = GoalSerializer(create_serializer.instance)
+        
         headers = self.get_success_headers(response_serializer.data)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
+# --- GoalDetailView (Correct) ---
 class GoalDetailView(RetrieveUpdateDestroyAPIView):
     """
     Handles retrieving, updating, and deleting a single goal.
     """
     queryset = Goal.objects.all()
     serializer_class = GoalSerializer
-    # Use BOTH permissions
-    # 1. Must be logged in
-    # 2. Must be the owner of this goal
     permission_classes = [IsAuthenticated, IsOwner]
     
 # --- OrderListView (Correct) ---
@@ -103,7 +113,7 @@ class RepayView(APIView):
             return Response({"error": "Failed to initiate STK push."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"message": "Repayment STK push initiated. Please enter your PIN."}, status=status.HTTP_200_OK)    
 
-# --- PaymentCallbackView (THIS IS THE FINAL FIX) ---
+# --- PaymentCallbackView (Correct) ---
 class PaymentCallbackView(APIView):
     """
     Handles ALL callbacks from PayHero and routes them
@@ -144,27 +154,23 @@ class PaymentCallbackView(APIView):
             amount_decimal = Decimal(str(callback_data.get('Amount')))
             receipt_number = callback_data.get('Receipt')
             
-            if Transaction.objects.filter(mpesa_receipt_number=receipt_number).exists():
+            # Check for duplicates *before* starting the transaction
+            if receipt_number and Transaction.objects.filter(mpesa_receipt_number=receipt_number).exists():
                 print(f"Duplicate Kampus Koin callback. Ref: {receipt_number}")
                 return
             
             if tx_type == 'DEPOSIT':
                 with transaction.atomic():
-                    # --- FIX ---
-                    # 1. Get the objects
                     goal = Goal.objects.get(id=object_id)
                     user = goal.owner
                     
-                    # 2. Do math in Python
                     goal.current_amount += amount_decimal
                     koin_to_add = int((amount_decimal / 100) * 15)
                     user.koin_score += koin_to_add
                     
-                    # 3. Save
                     goal.save()
                     user.save()
                     
-                    # 4. Create Transaction
                     Transaction.objects.create(
                         owner=user, goal=goal, transaction_type='DEPOSIT',
                         amount=amount_decimal, mpesa_receipt_number=receipt_number,
@@ -175,24 +181,18 @@ class PaymentCallbackView(APIView):
 
             elif tx_type == 'REPAYMENT':
                 with transaction.atomic():
-                    # --- FIX ---
-                    # 1. Get the objects
                     order = Order.objects.get(id=object_id)
                     user = order.user
                     
-                    # 2. Do math in Python
                     order.amount_paid += amount_decimal
                     
-                    # 3. Check status
                     if order.amount_paid >= order.amount_financed and order.status != 'PAID':
                         order.status = 'PAID'
                         user.koin_score += 1000 # Add bonus
                         user.save()
                     
-                    # 4. Save
                     order.save()
                     
-                    # 5. Create Transaction
                     Transaction.objects.create(
                         owner=user, order=order, transaction_type='REPAYMENT',
                         amount=amount_decimal, mpesa_receipt_number=receipt_number,
@@ -206,7 +206,6 @@ class PaymentCallbackView(APIView):
             raise
 
     def forward_to_other_app(self, data):
-        # ... (this function is correct) ...
         other_app_url = os.getenv('OTHER_APP_CALLBACK_URL')
         if not other_app_url:
             print("OTHER_APP_CALLBACK_URL is not set. Cannot forward callback.")
@@ -218,7 +217,6 @@ class PaymentCallbackView(APIView):
             print(f"Failed to forward callback to {other_app_url}: {e}")
 
 # --- TransactionListView, ProductListView, OrderCreateView (All Correct) ---
-# ... (rest of your views.py file) ...
 class TransactionListView(ListAPIView):
     serializer_class = TransactionSerializer
     permission_classes = [IsAuthenticated]
