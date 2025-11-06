@@ -97,7 +97,7 @@ class RepayView(APIView):
     def post(self, request, *args, **kwargs):
         user = request.user
         phone_number = user.phone_number
-        amount = request.data.get('amount')
+        amount = request.data.get('amount') 
         order_id = request.data.get('order_id')
         if not all([phone_number, amount, order_id]):
             return Response({"error": "Phone number, amount, and order_id are required."}, status=status.HTTP_400_BAD_REQUEST)

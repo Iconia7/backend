@@ -57,7 +57,7 @@ class OrderCreateSerializer(serializers.Serializer):
 # --- ORDER SERIALIZER (Correct) ---
 class OrderSerializer(serializers.ModelSerializer):
     product = ProductSerializer()
-
+  
     class Meta:
         model = Order
         fields = [
