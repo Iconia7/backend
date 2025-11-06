@@ -9,15 +9,11 @@ load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
 # --- PRODUCTION SETTINGS ---
 
 # 1. Get your secret key from the environment variable on Render
-#    You must add 'SECRET_KEY' to your Render Environment variables!
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-wi_s42l188)&&9nh7f5xq0*-r@$frk^$^%g)#4wq=r1^_j-o5u')
+#    You MUST add 'SECRET_KEY' to your Render Environment variables!
+SECRET_KEY = os.getenv('SECRET_KEY')
 
 # 2. DEBUG MUST BE FALSE in production
 DEBUG = False
@@ -29,7 +25,6 @@ ALLOWED_HOSTS = ['backend-fj0v.onrender.com']
 
 
 # Application definition
-
 INSTALLED_APPS = [
     'users',
     'rest_framework',
@@ -40,7 +35,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
-    'whitenoise.storage', # <-- THIS IS REQUIRED FOR STATIC FILES
+    'whitenoise.storage', # <-- THIS IS REQUIRED
     'django.contrib.staticfiles',
 ]
 
@@ -104,7 +99,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage' # <-- THIS IS REQUIRED
 
 
 # Default primary key field type
@@ -124,7 +119,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 # --- PRODUCTION SECURITY SETTINGS (THE FIX) ---
 # These lines tell Django it's running on HTTPS and to
-# set its cookies securely. This is what you were missing.
+# set its cookies securely. This is what you are missing.
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SECURE = True
 SECURE_SSL_REDIRECT = True
