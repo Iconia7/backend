@@ -255,6 +255,6 @@ class OrderCreateView(CreateAPIView):
                 koin_score = F('koin_score') - product.required_koin_score
             )
             user.refresh_from_db()
-        output_serializer = OrderSerializer(order)
+        output_serializer = OrderSerializer(order, context={'request': request})
         headers = self.get_success_headers(output_serializer.data)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
