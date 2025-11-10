@@ -86,6 +86,18 @@ class DepositView(APIView):
         if goal.current_amount >= goal.target_amount:
             return Response({"error": "This savings goal is already complete."}, status=status.HTTP_400_BAD_REQUEST)
         external_reference = f"kampus_koin-deposit-{goal.id}-{int(timezone.now().timestamp())}"
+        try:
+            Transaction.objects.create(
+                owner=user,
+                goal=goal,
+                transaction_type='DEPOSIT',
+                amount=Decimal(amount), # Store the amount
+                checkout_request_id=external_reference,
+                status='pending'
+            )
+        except Exception as e:
+            print(f"Error creating pending transaction: {e}")
+            return Response({"error": "A transaction error occurred. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         payhero_response = initiate_payhero_push(phone_number, amount, external_reference)
         if not payhero_response:
             return Response({"error": "Failed to initiate STK push."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -108,6 +120,18 @@ class RepayView(APIView):
         if order.status == 'PAID':
             return Response({"error": "This order is already fully paid."}, status=status.HTTP_400_BAD_REQUEST)
         external_reference = f"kampus_koin-repayment-{order.id}-{int(timezone.now().timestamp())}"
+        try:
+            Transaction.objects.create(
+                owner=user,
+                order=order,
+                transaction_type='REPAYMENT',
+                amount=Decimal(amount), # Store the amount
+                checkout_request_id=external_reference,
+                status='pending'
+            )
+        except Exception as e:
+            print(f"Error creating pending transaction: {e}")
+            return Response({"error": "A transaction error occurred. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         payhero_response = initiate_payhero_push(phone_number, amount, external_reference)
         if not payhero_response:
             return Response({"error": "Failed to initiate STK push."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -146,23 +170,35 @@ class PaymentCallbackView(APIView):
             parts = external_reference.split('-')
             tx_type = parts[1]
             object_id = int(parts[2])
-            
+            receipt_number = callback_data.get('Receipt')
+
+            # --- START OF MAJOR FIX ---
+
+            # 1. Find the pending transaction
+            try:
+                pending_tx = Transaction.objects.get(checkout_request_id=external_reference)
+                # Prevent re-processing a completed transaction
+                if pending_tx.status == 'completed':
+                    print(f"Duplicate callback. Transaction {pending_tx.id} already completed.")
+                    return
+            except Transaction.DoesNotExist:
+                print(f"No pending transaction found for ref: {external_reference}")
+                return # Nothing to do
+
+            # 2. Handle failed transaction
             if callback_data.get('ResultCode') != 0:
                 print(f"Kampus Koin transaction failed. Ref: {external_reference}")
+                pending_tx.status = 'failed'
+                pending_tx.save()
                 return
 
+            # 3. Handle successful transaction
             amount_decimal = Decimal(str(callback_data.get('Amount')))
-            receipt_number = callback_data.get('Receipt')
-            
-            # Check for duplicates *before* starting the transaction
-            if receipt_number and Transaction.objects.filter(mpesa_receipt_number=receipt_number).exists():
-                print(f"Duplicate Kampus Koin callback. Ref: {receipt_number}")
-                return
             
             if tx_type == 'DEPOSIT':
                 with transaction.atomic():
-                    goal = Goal.objects.get(id=object_id)
-                    user = goal.owner
+                    goal = pending_tx.goal
+                    user = pending_tx.owner
                     
                     goal.current_amount += amount_decimal
                     koin_to_add = int((amount_decimal / 100) * 15)
@@ -171,18 +207,17 @@ class PaymentCallbackView(APIView):
                     goal.save()
                     user.save()
                     
-                    Transaction.objects.create(
-                        owner=user, goal=goal, transaction_type='DEPOSIT',
-                        amount=amount_decimal, mpesa_receipt_number=receipt_number,
-                        transaction_date=timezone.now(), checkout_request_id=external_reference,
-                        status='completed'
-                    )
+                    # Update the transaction
+                    pending_tx.status = 'completed'
+                    pending_tx.mpesa_receipt_number = receipt_number
+                    pending_tx.transaction_date = timezone.now()
+                    pending_tx.save()
                     print(f"Successfully processed deposit for goal {goal.id}")
 
             elif tx_type == 'REPAYMENT':
                 with transaction.atomic():
-                    order = Order.objects.get(id=object_id)
-                    user = order.user
+                    order = pending_tx.order
+                    user = pending_tx.owner
                     
                     order.amount_paid += amount_decimal
                     
@@ -193,13 +228,14 @@ class PaymentCallbackView(APIView):
                     
                     order.save()
                     
-                    Transaction.objects.create(
-                        owner=user, order=order, transaction_type='REPAYMENT',
-                        amount=amount_decimal, mpesa_receipt_number=receipt_number,
-                        transaction_date=timezone.now(), checkout_request_id=external_reference,
-                        status='completed'
-                    )
+                    # Update the transaction
+                    pending_tx.status = 'completed'
+                    pending_tx.mpesa_receipt_number = receipt_number
+                    pending_tx.transaction_date = timezone.now()
+                    pending_tx.save()
                     print(f"Successfully processed repayment for order {order.id}")
+            
+            # --- END OF MAJOR FIX ---
         
         except Exception as e:
             print(f"Error in process_kampus_koin_payment: {e}")
