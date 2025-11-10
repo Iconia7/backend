@@ -121,5 +121,6 @@ CORS_ALLOW_ALL_ORIGINS = True
 # These lines tell Django it's running on HTTPS and to
 # set its cookies securely. This is what you are missing.
 CSRF_COOKIE_SECURE = True
+CSRF_TRUSTED_ORIGINS = ['https://*.onrender.com']
 SESSION_COOKIE_SECURE = True
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = False
