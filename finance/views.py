@@ -230,7 +230,7 @@ class ProductListView(ListAPIView):
 
 class OrderCreateView(CreateAPIView):
     permission_classes = [IsAuthenticated]
-    serializer_class = OrderSerializer 
+    serializer_class = OrderCreateSerializer 
     def create(self, request, *args, **kwargs):
         input_serializer = OrderCreateSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
