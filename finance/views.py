@@ -175,12 +175,17 @@ class PaymentCallbackView(APIView):
 
     def process_kampus_koin_payment(self, callback_data, external_reference):
         try:
-            # --- FIX 2: Check for duplicates immediately ---
-            # We store the external_reference in the checkout_request_id field.
-            # If it exists, we stop processing to prevent "UNIQUE constraint" errors.
-            if Transaction.objects.filter(checkout_request_id=external_reference).exists():
-                print(f"Duplicate transaction ignored: {external_reference}")
+            # --- FIX START: LOGIC UPDATE ---
+            # check if this transaction exists
+            existing_transaction = Transaction.objects.filter(checkout_request_id=external_reference).first()
+            
+            # If it exists and is ALREADY completed, stop (true duplicate)
+            if existing_transaction and existing_transaction.status == 'completed':
+                print(f"Duplicate completed transaction ignored: {external_reference}")
                 return
+
+            # If it doesn't exist, or it exists but is 'pending', we proceed.
+            # -------------------------------
 
             parts = external_reference.split('-')
             tx_type = parts[1].upper() 
@@ -189,9 +194,12 @@ class PaymentCallbackView(APIView):
             print(f"DEBUG: Type={tx_type}, ID={object_id}")
 
             # Handle PayHero result codes (0 usually means success)
-            # Note: PayHero sometimes sends 'Success' string in Status
             if callback_data.get('ResultCode') != 0 and callback_data.get('Status') != 'Success':
-                print(f"Kampus Koin transaction failed. Ref: {external_reference}")
+                print(f"Kampus Koin transaction failed at MPESA. Ref: {external_reference}")
+                # Optional: Mark existing pending transaction as failed
+                if existing_transaction:
+                    existing_transaction.status = 'failed'
+                    existing_transaction.save()
                 return
 
             amount_decimal = Decimal(str(callback_data.get('Amount')))
@@ -204,6 +212,7 @@ class PaymentCallbackView(APIView):
                     goal = Goal.objects.get(id=object_id)
                     user = goal.owner
                     
+                    # 1. Update Goal and User
                     goal.current_amount += amount_decimal
                     koin_to_add = int((amount_decimal / 100) * 15)
                     user.koin_score += koin_to_add
@@ -211,13 +220,21 @@ class PaymentCallbackView(APIView):
                     goal.save()
                     user.save()
                     
-                    Transaction.objects.create(
-                        owner=user, goal=goal, transaction_type='DEPOSIT',
-                        amount=amount_decimal, mpesa_receipt_number=receipt_number,
-                        transaction_date=timezone.now(), 
-                        checkout_request_id=external_reference, # Storing ref here to ensure uniqueness
-                        status='completed'
-                    )
+                    # 2. Update existing OR Create new transaction
+                    if existing_transaction:
+                        existing_transaction.status = 'completed'
+                        existing_transaction.mpesa_receipt_number = receipt_number
+                        existing_transaction.transaction_date = timezone.now()
+                        existing_transaction.save()
+                    else:
+                        # Fallback if DepositView failed to create it but Push went through
+                        Transaction.objects.create(
+                            owner=user, goal=goal, transaction_type='DEPOSIT',
+                            amount=amount_decimal, mpesa_receipt_number=receipt_number,
+                            transaction_date=timezone.now(), 
+                            checkout_request_id=external_reference,
+                            status='completed'
+                        )
                     print(f"Successfully processed deposit for goal {goal.id}")
 
             elif tx_type == 'REPAYMENT':
@@ -225,6 +242,7 @@ class PaymentCallbackView(APIView):
                     order = Order.objects.get(id=object_id)
                     user = order.user
                     
+                    # 1. Update Order
                     order.amount_paid += amount_decimal
                     
                     if order.amount_paid >= order.amount_financed and order.status != 'PAID':
@@ -234,19 +252,24 @@ class PaymentCallbackView(APIView):
                     
                     order.save()
                     
-                    Transaction.objects.create(
-                        owner=user, order=order, transaction_type='REPAYMENT',
-                        amount=amount_decimal, mpesa_receipt_number=receipt_number,
-                        transaction_date=timezone.now(), 
-                        checkout_request_id=external_reference,
-                        status='completed'
-                    )
+                    # 2. Update existing OR Create new transaction
+                    if existing_transaction:
+                        existing_transaction.status = 'completed'
+                        existing_transaction.mpesa_receipt_number = receipt_number
+                        existing_transaction.transaction_date = timezone.now()
+                        existing_transaction.save()
+                    else:
+                        Transaction.objects.create(
+                            owner=user, order=order, transaction_type='REPAYMENT',
+                            amount=amount_decimal, mpesa_receipt_number=receipt_number,
+                            transaction_date=timezone.now(), 
+                            checkout_request_id=external_reference,
+                            status='completed'
+                        )
                     print(f"Successfully processed repayment for order {order.id}")
         
         except Exception as e:
             print(f"Error in process_kampus_koin_payment: {e}")
-            # Don't raise here, just log it so we return 200 OK
-            # otherwise PayHero keeps retrying the bad transaction
 
     def forward_to_other_app(self, data):
         other_app_url = os.getenv('OTHER_APP_CALLBACK_URL')
