@@ -140,16 +140,27 @@ class RepayView(APIView):
 # --- PaymentCallbackView (Correct) ---
 class PaymentCallbackView(APIView):
     """
-    Handles ALL callbacks from PayHero and routes them
-    to the correct application.
+    Handles ALL callbacks from PayHero.
+    Debugs the payload and routes to the correct app.
     """
     def post(self, request, *args, **kwargs):
-        callback_data = request.data.get('response', {})
+        # 1. PRINT THE RAW DATA (This will show up in Render logs)
+        print(f"DEBUG: Raw PayHero Payload: {request.data}")
+
+        # 2. Try to find the data in two places
+        # Sometimes it's inside {'response': {...}}, sometimes it's just {...}
+        callback_data = request.data.get('response')
+        if not callback_data:
+            # If 'response' key doesn't exist, assume the data is at the root
+            callback_data = request.data
+
+        # 3. Get the reference
         external_reference = callback_data.get('ExternalReference')
 
         if not external_reference:
-            print("Callback received without ExternalReference")
-            return Response({"message": "Invalid callback."}, status=status.HTTP_400_BAD_REQUEST)
+            print("ERROR: Callback received without ExternalReference")
+            # Return 200 OK anyway so PayHero stops trying to send it
+            return Response({"message": "Invalid callback structure."}, status=status.HTTP_200_OK)
 
         try:
             if external_reference.startswith('kampus_koin-'):
@@ -168,37 +179,32 @@ class PaymentCallbackView(APIView):
         try:
             external_reference = callback_data.get('ExternalReference')
             parts = external_reference.split('-')
-            tx_type = parts[1]
+            
+            # FIX: Ensure UPPERCASE for comparison
+            tx_type = parts[1].upper() 
             object_id = int(parts[2])
-            receipt_number = callback_data.get('Receipt')
+            
+            print(f"DEBUG: Type={tx_type}, ID={object_id}") # Debug log
 
-            # --- START OF MAJOR FIX ---
-
-            # 1. Find the pending transaction
-            try:
-                pending_tx = Transaction.objects.get(checkout_request_id=external_reference)
-                # Prevent re-processing a completed transaction
-                if pending_tx.status == 'completed':
-                    print(f"Duplicate callback. Transaction {pending_tx.id} already completed.")
-                    return
-            except Transaction.DoesNotExist:
-                print(f"No pending transaction found for ref: {external_reference}")
-                return # Nothing to do
-
-            # 2. Handle failed transaction
             if callback_data.get('ResultCode') != 0:
                 print(f"Kampus Koin transaction failed. Ref: {external_reference}")
-                pending_tx.status = 'failed'
-                pending_tx.save()
                 return
 
-            # 3. Handle successful transaction
             amount_decimal = Decimal(str(callback_data.get('Amount')))
+            receipt_number = callback_data.get('Receipt') # Or 'MpesaReceiptNumber'
+            
+            # Handle potential different key names for receipt
+            if not receipt_number:
+                 receipt_number = callback_data.get('MpesaReceiptNumber')
+
+            if receipt_number and Transaction.objects.filter(mpesa_receipt_number=receipt_number).exists():
+                print(f"Duplicate Kampus Koin callback. Ref: {receipt_number}")
+                return
             
             if tx_type == 'DEPOSIT':
                 with transaction.atomic():
-                    goal = pending_tx.goal
-                    user = pending_tx.owner
+                    goal = Goal.objects.get(id=object_id)
+                    user = goal.owner
                     
                     goal.current_amount += amount_decimal
                     koin_to_add = int((amount_decimal / 100) * 15)
@@ -207,50 +213,50 @@ class PaymentCallbackView(APIView):
                     goal.save()
                     user.save()
                     
-                    # Update the transaction
-                    pending_tx.status = 'completed'
-                    pending_tx.mpesa_receipt_number = receipt_number
-                    pending_tx.transaction_date = timezone.now()
-                    pending_tx.save()
+                    Transaction.objects.create(
+                        owner=user, goal=goal, transaction_type='DEPOSIT',
+                        amount=amount_decimal, mpesa_receipt_number=receipt_number,
+                        transaction_date=timezone.now(), checkout_request_id=external_reference,
+                        status='completed'
+                    )
                     print(f"Successfully processed deposit for goal {goal.id}")
 
             elif tx_type == 'REPAYMENT':
                 with transaction.atomic():
-                    order = pending_tx.order
-                    user = pending_tx.owner
+                    order = Order.objects.get(id=object_id)
+                    user = order.user
                     
                     order.amount_paid += amount_decimal
                     
                     if order.amount_paid >= order.amount_financed and order.status != 'PAID':
                         order.status = 'PAID'
-                        user.koin_score += 1000 # Add bonus
+                        user.koin_score += 1000 
                         user.save()
                     
                     order.save()
                     
-                    # Update the transaction
-                    pending_tx.status = 'completed'
-                    pending_tx.mpesa_receipt_number = receipt_number
-                    pending_tx.transaction_date = timezone.now()
-                    pending_tx.save()
+                    Transaction.objects.create(
+                        owner=user, order=order, transaction_type='REPAYMENT',
+                        amount=amount_decimal, mpesa_receipt_number=receipt_number,
+                        transaction_date=timezone.now(), checkout_request_id=external_reference,
+                        status='completed'
+                    )
                     print(f"Successfully processed repayment for order {order.id}")
-            
-            # --- END OF MAJOR FIX ---
         
         except Exception as e:
             print(f"Error in process_kampus_koin_payment: {e}")
             raise
 
     def forward_to_other_app(self, data):
+        # ... (Keep your existing forward logic here)
+        # I'll include it briefly for completeness:
         other_app_url = os.getenv('OTHER_APP_CALLBACK_URL')
         if not other_app_url:
-            print("OTHER_APP_CALLBACK_URL is not set. Cannot forward callback.")
             return
         try:
             requests.post(other_app_url, json=data, timeout=5, verify=False)
-            print("Successfully forwarded callback.")
-        except requests.exceptions.RequestException as e:
-            print(f"Failed to forward callback to {other_app_url}: {e}")
+        except Exception as e:
+            print(f"Forwarding error: {e}")
 
 # --- TransactionListView, ProductListView, OrderCreateView (All Correct) ---
 class TransactionListView(ListAPIView):
