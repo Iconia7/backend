@@ -141,31 +141,29 @@ class RepayView(APIView):
 class PaymentCallbackView(APIView):
     """
     Handles ALL callbacks from PayHero.
-    Debugs the payload and routes to the correct app.
+    Debugs the payload, handles key variations, and prevents duplicates.
     """
     def post(self, request, *args, **kwargs):
-        # 1. PRINT THE RAW DATA (This will show up in Render logs)
         print(f"DEBUG: Raw PayHero Payload: {request.data}")
 
-        # 2. Try to find the data in two places
-        # Sometimes it's inside {'response': {...}}, sometimes it's just {...}
         callback_data = request.data.get('response')
         if not callback_data:
-            # If 'response' key doesn't exist, assume the data is at the root
             callback_data = request.data
 
-        # 3. Get the reference
+        # --- FIX 1: Handle different key names for the reference ---
         external_reference = callback_data.get('ExternalReference')
-
         if not external_reference:
-            print("ERROR: Callback received without ExternalReference")
-            # Return 200 OK anyway so PayHero stops trying to send it
+            external_reference = callback_data.get('User_Reference')
+        
+        if not external_reference:
+            print("ERROR: Callback received without ExternalReference or User_Reference")
+            # Return 200 OK so PayHero stops sending this bad payload
             return Response({"message": "Invalid callback structure."}, status=status.HTTP_200_OK)
 
         try:
             if external_reference.startswith('kampus_koin-'):
                 print(f"Processing Kampus Koin callback: {external_reference}")
-                self.process_kampus_koin_payment(callback_data)
+                self.process_kampus_koin_payment(callback_data, external_reference)
             else:
                 print(f"Forwarding callback to other app: {external_reference}")
                 self.forward_to_other_app(request.data)
@@ -175,32 +173,32 @@ class PaymentCallbackView(APIView):
 
         return Response({"message": "Callback processed or forwarded"}, status=status.HTTP_200_OK)
 
-    def process_kampus_koin_payment(self, callback_data):
+    def process_kampus_koin_payment(self, callback_data, external_reference):
         try:
-            external_reference = callback_data.get('ExternalReference')
+            # --- FIX 2: Check for duplicates immediately ---
+            # We store the external_reference in the checkout_request_id field.
+            # If it exists, we stop processing to prevent "UNIQUE constraint" errors.
+            if Transaction.objects.filter(checkout_request_id=external_reference).exists():
+                print(f"Duplicate transaction ignored: {external_reference}")
+                return
+
             parts = external_reference.split('-')
-            
-            # FIX: Ensure UPPERCASE for comparison
             tx_type = parts[1].upper() 
             object_id = int(parts[2])
             
-            print(f"DEBUG: Type={tx_type}, ID={object_id}") # Debug log
+            print(f"DEBUG: Type={tx_type}, ID={object_id}")
 
-            if callback_data.get('ResultCode') != 0:
+            # Handle PayHero result codes (0 usually means success)
+            # Note: PayHero sometimes sends 'Success' string in Status
+            if callback_data.get('ResultCode') != 0 and callback_data.get('Status') != 'Success':
                 print(f"Kampus Koin transaction failed. Ref: {external_reference}")
                 return
 
             amount_decimal = Decimal(str(callback_data.get('Amount')))
-            receipt_number = callback_data.get('Receipt') # Or 'MpesaReceiptNumber'
             
-            # Handle potential different key names for receipt
-            if not receipt_number:
-                 receipt_number = callback_data.get('MpesaReceiptNumber')
+            # Handle different receipt keys
+            receipt_number = callback_data.get('Receipt') or callback_data.get('MpesaReceiptNumber') or callback_data.get('MPESA_Reference')
 
-            if receipt_number and Transaction.objects.filter(mpesa_receipt_number=receipt_number).exists():
-                print(f"Duplicate Kampus Koin callback. Ref: {receipt_number}")
-                return
-            
             if tx_type == 'DEPOSIT':
                 with transaction.atomic():
                     goal = Goal.objects.get(id=object_id)
@@ -216,7 +214,8 @@ class PaymentCallbackView(APIView):
                     Transaction.objects.create(
                         owner=user, goal=goal, transaction_type='DEPOSIT',
                         amount=amount_decimal, mpesa_receipt_number=receipt_number,
-                        transaction_date=timezone.now(), checkout_request_id=external_reference,
+                        transaction_date=timezone.now(), 
+                        checkout_request_id=external_reference, # Storing ref here to ensure uniqueness
                         status='completed'
                     )
                     print(f"Successfully processed deposit for goal {goal.id}")
@@ -238,22 +237,22 @@ class PaymentCallbackView(APIView):
                     Transaction.objects.create(
                         owner=user, order=order, transaction_type='REPAYMENT',
                         amount=amount_decimal, mpesa_receipt_number=receipt_number,
-                        transaction_date=timezone.now(), checkout_request_id=external_reference,
+                        transaction_date=timezone.now(), 
+                        checkout_request_id=external_reference,
                         status='completed'
                     )
                     print(f"Successfully processed repayment for order {order.id}")
         
         except Exception as e:
             print(f"Error in process_kampus_koin_payment: {e}")
-            raise
+            # Don't raise here, just log it so we return 200 OK
+            # otherwise PayHero keeps retrying the bad transaction
 
     def forward_to_other_app(self, data):
-        # ... (Keep your existing forward logic here)
-        # I'll include it briefly for completeness:
         other_app_url = os.getenv('OTHER_APP_CALLBACK_URL')
         if not other_app_url:
             return
-        try:
+        try: 
             requests.post(other_app_url, json=data, timeout=5, verify=False)
         except Exception as e:
             print(f"Forwarding error: {e}")
