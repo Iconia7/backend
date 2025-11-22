@@ -30,6 +30,7 @@ class TransactionSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     is_unlocked = serializers.SerializerMethodField()
     is_already_unlocked = serializers.SerializerMethodField()
+    active_order = serializers.SerializerMethodField()
     class Meta:
         model = Product
         fields = [
