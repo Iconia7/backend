@@ -11,6 +11,7 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from decimal import Decimal
+from django.db.models import Sum
 import requests
 import os
 
@@ -295,18 +296,56 @@ class ProductListView(ListAPIView):
 class OrderCreateView(CreateAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = OrderCreateSerializer 
+    
     def create(self, request, *args, **kwargs):
         input_serializer = OrderCreateSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
+        
         product_id = input_serializer.validated_data['product_id']
         product = Product.objects.get(id=product_id)
         user = request.user
+
+        # 1. Koin Score Validation
         if user.koin_score < product.required_koin_score:
-            raise ValidationError("Your Koin Score is not high enough to unlock this item. Keep saving!")
+            raise ValidationError("Your Koin Score is not high enough to unlock this item.")
+
+        # 2. Duplicate Check
         if Order.objects.filter(user=user, product=product).exists():
             raise ValidationError("You have already unlocked this item.")
+
+        # 3. Calculate Down Payment
+        down_payment = product.price * Decimal('0.25')
+
         with transaction.atomic():
-            down_payment = product.price * Decimal('0.25')
+            # 4. Check Total Savings
+            total_savings = Goal.objects.filter(owner=user).aggregate(Sum('current_amount'))['current_amount__sum'] or Decimal('0.00')
+
+            if total_savings < down_payment:
+                # Calculate how much more they need
+                shortfall = down_payment - total_savings
+                raise ValidationError(f"Insufficient savings. Down payment is KES {down_payment:,.2f}. You need KES {shortfall:,.2f} more.")
+
+            # 5. Deduct funds from Goals (FIFO or Proportional)
+            # Here we deduct from available goals until the down payment is covered
+            remaining_to_deduct = down_payment
+            user_goals = Goal.objects.filter(owner=user, current_amount__gt=0).order_by('created_at')
+
+            for goal in user_goals:
+                if remaining_to_deduct <= 0:
+                    break
+                
+                if goal.current_amount >= remaining_to_deduct:
+                    # Goal has enough to cover the rest
+                    goal.current_amount -= remaining_to_deduct
+                    goal.save()
+                    remaining_to_deduct = 0
+                else:
+                    # Take everything from this goal and move to next
+                    remaining_to_deduct -= goal.current_amount
+                    goal.current_amount = Decimal('0.00')
+                    goal.save()
+
+            # 6. Create Order
             amount_financed = product.price - down_payment
             order = Order.objects.create(
                 user=user,
@@ -315,10 +354,13 @@ class OrderCreateView(CreateAPIView):
                 down_payment=down_payment,
                 amount_financed=amount_financed
             )
+
+            # 7. Deduct Koin Score
             User.objects.filter(id=user.id).update(
                 koin_score = F('koin_score') - product.required_koin_score
             )
             user.refresh_from_db()
+        
         output_serializer = OrderSerializer(order, context={'request': request})
         headers = self.get_success_headers(output_serializer.data)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)

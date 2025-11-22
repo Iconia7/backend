@@ -34,7 +34,7 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'id', 'name', 'description', 'price', 'required_koin_score', 
-            'is_unlocked','is_already_unlocked','vendor_name', 'vendor_location'
+            'is_unlocked','is_already_unlocked', 'active_order','vendor_name', 'vendor_location'
         ]
     
     def get_is_unlocked(self, obj):
@@ -44,6 +44,25 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_is_already_unlocked(self, obj):
         user = self.context['request'].user
         return Order.objects.filter(user=user, product=obj).exists()
+    
+    def get_active_order(self, obj):
+        user = self.context['request'].user
+        order = Order.objects.filter(user=user, product=obj).first()
+        if order:
+            # We return a simple dict to avoid circular dependency with OrderSerializer
+            return {
+                'id': order.id,
+                'pickup_qr_code': order.pickup_qr_code,
+                'down_payment': float(order.down_payment),
+                'amount_financed': float(order.amount_financed),
+                'status': order.status,
+                'product': { 
+                    'name': obj.name,
+                    'vendorName': obj.vendor_name,
+                    'vendorLocation': obj.vendor_location
+                }
+            }
+        return None
 
 # --- ORDER CREATE SERIALIZER (Correct) ---
 class OrderCreateSerializer(serializers.Serializer):
