@@ -2,7 +2,7 @@
 
 import uuid
 from rest_framework.generics import ListCreateAPIView, ListAPIView, CreateAPIView, RetrieveUpdateDestroyAPIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated,AllowAny
 from .permissions import IsOwner
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -370,7 +370,7 @@ class VerifyPickupView(APIView):
     """
     Endpoint for Vendor App to scan QR, verify order, and trigger payout.
     """
-    permission_classes = [IsAuthenticated] # In real world, IsVendor permission
+    permission_classes = [AllowAny] # In real world, IsVendor permission
 
     def post(self, request, *args, **kwargs):
         qr_code = request.data.get('pickup_qr_code')
