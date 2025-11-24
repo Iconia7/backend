@@ -85,4 +85,15 @@ class Order(models.Model):
     pickup_qr_code = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
 
     def __str__(self):
-        return f"Order #{self.id} - {self.product.name} for {self.user.email}"        
+        return f"Order #{self.id} - {self.product.name} for {self.user.email}"
+    
+class VendorPayout(models.Model):
+    order = models.OneToOneField(Order, on_delete=models.CASCADE)
+    vendor_name = models.CharField(max_length=255)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    mpesa_transaction_id = models.CharField(max_length=50, blank=True, null=True) # For the B2C receipt
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Payout for {self.order.product.name} to {self.vendor_name}"   
+         

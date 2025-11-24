@@ -1,5 +1,6 @@
 # backend/finance/views.py
 
+import uuid
 from rest_framework.generics import ListCreateAPIView, ListAPIView, CreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsOwner
@@ -15,7 +16,7 @@ from django.db.models import Sum
 import requests
 import os
 
-from .models import Goal, Transaction, Product, User, Order
+from .models import Goal, Transaction, Product, User, Order, VendorPayout
 from .serializers import (
     GoalSerializer, GoalCreateSerializer, TransactionSerializer, ProductSerializer, 
     OrderCreateSerializer, OrderSerializer
@@ -364,3 +365,49 @@ class OrderCreateView(CreateAPIView):
         output_serializer = OrderSerializer(order, context={'request': request})
         headers = self.get_success_headers(output_serializer.data)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
+class VerifyPickupView(APIView):
+    """
+    Endpoint for Vendor App to scan QR, verify order, and trigger payout.
+    """
+    permission_classes = [IsAuthenticated] # In real world, IsVendor permission
+
+    def post(self, request, *args, **kwargs):
+        qr_code = request.data.get('pickup_qr_code')
+        if not qr_code:
+            return Response({"error": "QR code is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Find the order by the unique QR code
+            order = Order.objects.get(pickup_qr_code=qr_code)
+        except (Order.DoesNotExist, ValidationError):
+            return Response({"error": "Invalid or expired QR code."}, status=status.HTTP_404_NOT_FOUND)
+
+        if order.status != 'READY_FOR_PICKUP':
+            return Response({
+                "error": "Order already processed",
+                "current_status": order.status
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            # 1. Change status to COMPLETED (This starts the user's repayment phase)
+            order.status = 'COMPLETED' 
+            order.save()
+            
+            # 2. Simulate Payout to Vendor
+            # In a real app, this would trigger a B2C M-Pesa API call
+            VendorPayout.objects.create(
+                order=order,
+                vendor_name=order.product.vendor_name or "Unknown Vendor",
+                amount=order.total_amount, # We pay the vendor the full price
+                mpesa_transaction_id=f"PAYOUT-{uuid.uuid4().hex[:8].upper()}" # Fake receipt
+            )
+
+        # Return details to the Vendor App so they can see what they just scanned
+        return Response({
+            "success": True,
+            "message": "Pickup Confirmed",
+            "product": order.product.name,
+            "customer": order.user.email,
+            "amount_credited": str(order.total_amount)
+        }, status=status.HTTP_200_OK)
