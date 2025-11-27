@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import os
+import dj_database_url
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -78,6 +79,18 @@ DATABASES = {
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+
+# --- DATABASE CONFIGURATION FOR RENDER ---
+# If the 'DATABASE_URL' environment variable exists (which it will on Render),
+# use it. Otherwise, default to SQLite (for local development).
+
+database_url = os.getenv('DATABASE_URL')
+
+if database_url:
+    DATABASES['default'] = dj_database_url.config(
+        default=database_url,
+        conn_max_age=600
+    )
 
 
 # Password validation
