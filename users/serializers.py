@@ -31,7 +31,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         # We list ALL fields we want the app to receive back
-        fields = ['id', 'email', 'name', 'phone_number', 'koin_score', 'profile_picture'] 
+        fields = ['id', 'email', 'name', 'phone_number', 'koin_score'] 
         
         # We specify which ones are strictly NOT editable
         read_only_fields = ['id', 'email', 'koin_score'] 
