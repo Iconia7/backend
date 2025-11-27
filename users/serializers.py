@@ -26,3 +26,15 @@ class UserSerializer(serializers.ModelSerializer):
 
         instance.save()
         return instance
+    
+class UserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        # Allow updating name and phone number
+        fields = ['name', 'phone_number'] 
+        
+    def validate_phone_number(self, value):
+        # Add basic validation if needed
+        if value and len(value) < 10:
+             raise serializers.ValidationError("Phone number is too short.")
+        return value    
