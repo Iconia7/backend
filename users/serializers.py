@@ -30,11 +30,13 @@ class UserSerializer(serializers.ModelSerializer):
 class UserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        # Allow updating name and phone number
-        fields = ['name', 'phone_number'] 
+        # We list ALL fields we want the app to receive back
+        fields = ['id', 'email', 'name', 'phone_number', 'koin_score', 'profile_picture'] 
+        
+        # We specify which ones are strictly NOT editable
+        read_only_fields = ['id', 'email', 'koin_score'] 
         
     def validate_phone_number(self, value):
-        # Add basic validation if needed
         if value and len(value) < 10:
              raise serializers.ValidationError("Phone number is too short.")
-        return value    
+        return value  
