@@ -1,33 +1,88 @@
 # backend/finance/views.py
 
+import json
 import uuid
+import os
+import firebase_admin
+from firebase_admin import credentials, messaging, initialize_app  # Import Firebase
 from rest_framework.generics import ListCreateAPIView, ListAPIView, CreateAPIView, RetrieveUpdateDestroyAPIView
-from rest_framework.permissions import IsAuthenticated,AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from .permissions import IsOwner
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Sum
 from django.utils import timezone
 from decimal import Decimal
-from django.db.models import Sum
 import requests
-import os
 
 from .models import Goal, Transaction, Product, User, Order, VendorPayout
 from .serializers import (
     GoalSerializer, GoalCreateSerializer, TransactionSerializer, ProductSerializer, 
-    OrderCreateSerializer, OrderSerializer
+    OrderCreateSerializer, OrderSerializer, FCMTokenSerializer # Added FCMTokenSerializer
 )
 from .payhero_utils import initiate_payhero_push
 
-# --- GoalListCreateView (FIXED) ---
+# --- 1. FIREBASE INITIALIZATION ---
+# Initialize Firebase Admin SDK (Check if already initialized to prevent errors on auto-reload)
+if not firebase_admin._apps:
+    # Option A: Check for Environment Variable (Production)
+    firebase_creds_env = os.environ.get('FIREBASE_CREDENTIALS')
+    
+    if firebase_creds_env:
+        # Load from the string variable
+        cred_dict = json.loads(firebase_creds_env)
+        cred = credentials.Certificate(cred_dict)
+    
+    # Option B: Fallback to local file (Development)
+    elif os.path.exists("serviceAccountKey.json"):
+        cred = credentials.Certificate("serviceAccountKey.json")
+    
+    else:
+        print("WARNING: Firebase credentials not found. Notifications will fail.")
+        cred = None
+
+    if cred:
+        initialize_app(cred)
+
+def send_fcm_notification(user, title, body, data=None):
+    """Helper function to send notification to a specific user"""
+    if not user.fcm_token:
+        print(f"User {user.email} has no FCM token. Skipping notification.")
+        return
+
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            data=data or {},
+            token=user.fcm_token,
+        )
+        response = messaging.send(message)
+        print('Successfully sent message:', response)
+    except Exception as e:
+        print('Error sending message:', e)
+
+# --- 2. NEW VIEW: Update FCM Token ---
+class UpdateFCMTokenView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = FCMTokenSerializer(data=request.data)
+        if serializer.is_valid():
+            user = request.user
+            user.fcm_token = serializer.validated_data['fcm_token']
+            user.save()
+            return Response({"message": "FCM token updated"}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# --- EXISTING VIEWS (Unchanged) ---
 class GoalListCreateView(ListCreateAPIView):
     permission_classes = [IsAuthenticated]
-    
-    # By default, use the FULL serializer for GET requests
     serializer_class = GoalSerializer 
 
     def get_queryset(self):
@@ -37,41 +92,29 @@ class GoalListCreateView(ListCreateAPIView):
         serializer.save(owner=self.request.user)
 
     def get_serializer_class(self):
-        # When we are CREATING (POST), use the simple Create serializer
         if self.request.method == 'POST':
             return GoalCreateSerializer
-        # Otherwise (GET), use the default full GoalSerializer
         return super().get_serializer_class()
     
     def create(self, request, *args, **kwargs):
-        # Use the 'create' serializer for INCOMING data
         create_serializer = self.get_serializer(data=request.data)
         create_serializer.is_valid(raise_exception=True)
         self.perform_create(create_serializer)
-        
-        # Use the 'list' serializer for the OUTGOING response
         response_serializer = GoalSerializer(create_serializer.instance)
-        
         headers = self.get_success_headers(response_serializer.data)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-# --- GoalDetailView (Correct) ---
 class GoalDetailView(RetrieveUpdateDestroyAPIView):
-    """
-    Handles retrieving, updating, and deleting a single goal.
-    """
     queryset = Goal.objects.all()
     serializer_class = GoalSerializer
     permission_classes = [IsAuthenticated, IsOwner]
-    
-# --- OrderListView (Correct) ---
+
 class OrderListView(ListAPIView):
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
     def get_queryset(self):
         return Order.objects.filter(user=self.request.user).order_by('-order_date')
 
-# --- DepositView (Correct) ---
 class DepositView(APIView):
     permission_classes = [IsAuthenticated]
     def post(self, request, *args, **kwargs):
@@ -93,19 +136,18 @@ class DepositView(APIView):
                 owner=user,
                 goal=goal,
                 transaction_type='DEPOSIT',
-                amount=Decimal(amount), # Store the amount
+                amount=Decimal(amount),
                 checkout_request_id=external_reference,
                 status='pending'
             )
         except Exception as e:
             print(f"Error creating pending transaction: {e}")
-            return Response({"error": "A transaction error occurred. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": "Transaction error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         payhero_response = initiate_payhero_push(phone_number, amount, external_reference)
         if not payhero_response:
             return Response({"error": "Failed to initiate STK push."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"message": "STK push initiated successfully. Please enter your PIN."}, status=status.HTTP_200_OK)
 
-# --- RepayView (Correct) ---
 class RepayView(APIView):
     permission_classes = [IsAuthenticated]
     def post(self, request, *args, **kwargs):
@@ -127,24 +169,20 @@ class RepayView(APIView):
                 owner=user,
                 order=order,
                 transaction_type='REPAYMENT',
-                amount=Decimal(amount), # Store the amount
+                amount=Decimal(amount),
                 checkout_request_id=external_reference,
                 status='pending'
             )
         except Exception as e:
             print(f"Error creating pending transaction: {e}")
-            return Response({"error": "A transaction error occurred. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": "Transaction error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         payhero_response = initiate_payhero_push(phone_number, amount, external_reference)
         if not payhero_response:
             return Response({"error": "Failed to initiate STK push."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"message": "Repayment STK push initiated. Please enter your PIN."}, status=status.HTTP_200_OK)    
 
-# --- PaymentCallbackView (Correct) ---
+# --- 3. UPDATED CALLBACK VIEW (With Notification Triggers) ---
 class PaymentCallbackView(APIView):
-    """
-    Handles ALL callbacks from PayHero.
-    Debugs the payload, handles key variations, and prevents duplicates.
-    """
     def post(self, request, *args, **kwargs):
         print(f"DEBUG: Raw PayHero Payload: {request.data}")
 
@@ -152,14 +190,9 @@ class PaymentCallbackView(APIView):
         if not callback_data:
             callback_data = request.data
 
-        # --- FIX 1: Handle different key names for the reference ---
-        external_reference = callback_data.get('ExternalReference')
-        if not external_reference:
-            external_reference = callback_data.get('User_Reference')
+        external_reference = callback_data.get('ExternalReference') or callback_data.get('User_Reference')
         
         if not external_reference:
-            print("ERROR: Callback received without ExternalReference or User_Reference")
-            # Return 200 OK so PayHero stops sending this bad payload
             return Response({"message": "Invalid callback structure."}, status=status.HTTP_200_OK)
 
         try:
@@ -177,36 +210,32 @@ class PaymentCallbackView(APIView):
 
     def process_kampus_koin_payment(self, callback_data, external_reference):
         try:
-            # --- FIX START: LOGIC UPDATE ---
-            # check if this transaction exists
             existing_transaction = Transaction.objects.filter(checkout_request_id=external_reference).first()
             
-            # If it exists and is ALREADY completed, stop (true duplicate)
             if existing_transaction and existing_transaction.status == 'completed':
                 print(f"Duplicate completed transaction ignored: {external_reference}")
                 return
-
-            # If it doesn't exist, or it exists but is 'pending', we proceed.
-            # -------------------------------
 
             parts = external_reference.split('-')
             tx_type = parts[1].upper() 
             object_id = int(parts[2])
             
-            print(f"DEBUG: Type={tx_type}, ID={object_id}")
-
-            # Handle PayHero result codes (0 usually means success)
+            # Handle Failure
             if callback_data.get('ResultCode') != 0 and callback_data.get('Status') != 'Success':
                 print(f"Kampus Koin transaction failed at MPESA. Ref: {external_reference}")
-                # Optional: Mark existing pending transaction as failed
                 if existing_transaction:
                     existing_transaction.status = 'failed'
                     existing_transaction.save()
+                    
+                    # TRIGGER NOTIFICATION: FAILURE
+                    send_fcm_notification(
+                        existing_transaction.owner,
+                        "Transaction Failed ⚠️",
+                        f"Your {tx_type.lower()} request could not be completed."
+                    )
                 return
 
             amount_decimal = Decimal(str(callback_data.get('Amount')))
-            
-            # Handle different receipt keys
             receipt_number = callback_data.get('Receipt') or callback_data.get('MpesaReceiptNumber') or callback_data.get('MPESA_Reference')
 
             if tx_type == 'DEPOSIT':
@@ -214,7 +243,6 @@ class PaymentCallbackView(APIView):
                     goal = Goal.objects.get(id=object_id)
                     user = goal.owner
                     
-                    # 1. Update Goal and User
                     goal.current_amount += amount_decimal
                     koin_to_add = int((amount_decimal / 100) * 15)
                     user.koin_score += koin_to_add
@@ -222,14 +250,12 @@ class PaymentCallbackView(APIView):
                     goal.save()
                     user.save()
                     
-                    # 2. Update existing OR Create new transaction
                     if existing_transaction:
                         existing_transaction.status = 'completed'
                         existing_transaction.mpesa_receipt_number = receipt_number
                         existing_transaction.transaction_date = timezone.now()
                         existing_transaction.save()
                     else:
-                        # Fallback if DepositView failed to create it but Push went through
                         Transaction.objects.create(
                             owner=user, goal=goal, transaction_type='DEPOSIT',
                             amount=amount_decimal, mpesa_receipt_number=receipt_number,
@@ -237,6 +263,14 @@ class PaymentCallbackView(APIView):
                             checkout_request_id=external_reference,
                             status='completed'
                         )
+                    
+                    # TRIGGER NOTIFICATION: DEPOSIT SUCCESS
+                    send_fcm_notification(
+                        user,
+                        "Deposit Received! 💰",
+                        f"KES {amount_decimal:,.0f} has been added to '{goal.name}'.",
+                        data={"type": "deposit", "goal_id": str(goal.id)}
+                    )
                     print(f"Successfully processed deposit for goal {goal.id}")
 
             elif tx_type == 'REPAYMENT':
@@ -244,7 +278,6 @@ class PaymentCallbackView(APIView):
                     order = Order.objects.get(id=object_id)
                     user = order.user
                     
-                    # 1. Update Order
                     order.amount_paid += amount_decimal
                     
                     if order.amount_paid >= order.amount_financed and order.status != 'PAID':
@@ -254,7 +287,6 @@ class PaymentCallbackView(APIView):
                     
                     order.save()
                     
-                    # 2. Update existing OR Create new transaction
                     if existing_transaction:
                         existing_transaction.status = 'completed'
                         existing_transaction.mpesa_receipt_number = receipt_number
@@ -268,6 +300,14 @@ class PaymentCallbackView(APIView):
                             checkout_request_id=external_reference,
                             status='completed'
                         )
+                    
+                    # TRIGGER NOTIFICATION: REPAYMENT SUCCESS
+                    send_fcm_notification(
+                        user,
+                        "Repayment Confirmed! ✅",
+                        f"KES {amount_decimal:,.0f} received for {order.product.name}.",
+                        data={"type": "repayment", "order_id": str(order.id)}
+                    )
                     print(f"Successfully processed repayment for order {order.id}")
         
         except Exception as e:
@@ -282,7 +322,7 @@ class PaymentCallbackView(APIView):
         except Exception as e:
             print(f"Forwarding error: {e}")
 
-# --- TransactionListView, ProductListView, OrderCreateView (All Correct) ---
+# ... Other Views (TransactionListView, etc) remain unchanged ...
 class TransactionListView(ListAPIView):
     serializer_class = TransactionSerializer
     permission_classes = [IsAuthenticated]
@@ -306,28 +346,21 @@ class OrderCreateView(CreateAPIView):
         product = Product.objects.get(id=product_id)
         user = request.user
 
-        # 1. Koin Score Validation
         if user.koin_score < product.required_koin_score:
             raise ValidationError("Your Koin Score is not high enough to unlock this item.")
 
-        # 2. Duplicate Check
         if Order.objects.filter(user=user, product=product).exists():
             raise ValidationError("You have already unlocked this item.")
 
-        # 3. Calculate Down Payment
         down_payment = product.price * Decimal('0.25')
 
         with transaction.atomic():
-            # 4. Check Total Savings
             total_savings = Goal.objects.filter(owner=user).aggregate(Sum('current_amount'))['current_amount__sum'] or Decimal('0.00')
 
             if total_savings < down_payment:
-                # Calculate how much more they need
                 shortfall = down_payment - total_savings
                 raise ValidationError(f"Insufficient savings. Down payment is KES {down_payment:,.2f}. You need KES {shortfall:,.2f} more.")
 
-            # 5. Deduct funds from Goals (FIFO or Proportional)
-            # Here we deduct from available goals until the down payment is covered
             remaining_to_deduct = down_payment
             user_goals = Goal.objects.filter(owner=user, current_amount__gt=0).order_by('created_at')
 
@@ -336,17 +369,14 @@ class OrderCreateView(CreateAPIView):
                     break
                 
                 if goal.current_amount >= remaining_to_deduct:
-                    # Goal has enough to cover the rest
                     goal.current_amount -= remaining_to_deduct
                     goal.save()
                     remaining_to_deduct = 0
                 else:
-                    # Take everything from this goal and move to next
                     remaining_to_deduct -= goal.current_amount
                     goal.current_amount = Decimal('0.00')
                     goal.save()
 
-            # 6. Create Order
             amount_financed = product.price - down_payment
             order = Order.objects.create(
                 user=user,
@@ -356,7 +386,6 @@ class OrderCreateView(CreateAPIView):
                 amount_financed=amount_financed
             )
 
-            # 7. Deduct Koin Score
             User.objects.filter(id=user.id).update(
                 koin_score = F('koin_score') - product.required_koin_score
             )
@@ -367,10 +396,7 @@ class OrderCreateView(CreateAPIView):
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
     
 class VerifyPickupView(APIView):
-    """
-    Endpoint for Vendor App to scan QR, verify order, and trigger payout.
-    """
-    permission_classes = [AllowAny] # In real world, IsVendor permission
+    permission_classes = [AllowAny] 
 
     def post(self, request, *args, **kwargs):
         qr_code = request.data.get('pickup_qr_code')
@@ -378,7 +404,6 @@ class VerifyPickupView(APIView):
             return Response({"error": "QR code is required."}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            # Find the order by the unique QR code
             order = Order.objects.get(pickup_qr_code=qr_code)
         except (Order.DoesNotExist, ValidationError):
             return Response({"error": "Invalid or expired QR code."}, status=status.HTTP_404_NOT_FOUND)
@@ -390,20 +415,23 @@ class VerifyPickupView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
-            # 1. Change status to COMPLETED (This starts the user's repayment phase)
             order.status = 'COMPLETED' 
             order.save()
             
-            # 2. Simulate Payout to Vendor
-            # In a real app, this would trigger a B2C M-Pesa API call
             VendorPayout.objects.create(
                 order=order,
                 vendor_name=order.product.vendor_name or "Unknown Vendor",
-                amount=order.total_amount, # We pay the vendor the full price
-                mpesa_transaction_id=f"PAYOUT-{uuid.uuid4().hex[:8].upper()}" # Fake receipt
+                amount=order.total_amount, 
+                mpesa_transaction_id=f"PAYOUT-{uuid.uuid4().hex[:8].upper()}" 
             )
 
-        # Return details to the Vendor App so they can see what they just scanned
+        # TRIGGER NOTIFICATION: PICKUP SUCCESS
+        send_fcm_notification(
+            order.user,
+            "Pickup Verified! ✅",
+            f"Enjoy your {order.product.name}! Repayment period starts now."
+        )
+
         return Response({
             "success": True,
             "message": "Pickup Confirmed",

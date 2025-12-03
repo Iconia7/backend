@@ -90,6 +90,9 @@ class ProductSerializer(serializers.ModelSerializer):
                 'user': None # Explicitly send None for user to match your Flutter model
             }
         return None
+    
+class FCMTokenSerializer(serializers.Serializer):
+    fcm_token = serializers.CharField(max_length=255)    
 
 # --- ORDER CREATE SERIALIZER (Correct) ---
 class OrderCreateSerializer(serializers.Serializer):

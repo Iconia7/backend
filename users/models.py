@@ -17,6 +17,7 @@ class User(AbstractUser):
 
     # It will store the user's financial discipline score.
     koin_score = models.IntegerField(default=0)
+    fcm_token = models.CharField(max_length=255, blank=True, null=True)
 
     # use the 'email' field for login.
     USERNAME_FIELD = 'email'
