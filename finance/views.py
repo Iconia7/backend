@@ -1,10 +1,8 @@
-# backend/finance/views.py
-
 import json
 import uuid
 import os
 import firebase_admin
-from firebase_admin import credentials, messaging, initialize_app  # Import Firebase
+from firebase_admin import credentials, messaging, initialize_app
 from rest_framework.generics import ListCreateAPIView, ListAPIView, CreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .permissions import IsOwner
@@ -21,25 +19,19 @@ import requests
 from .models import Goal, Transaction, Product, User, Order, VendorPayout
 from .serializers import (
     GoalSerializer, GoalCreateSerializer, TransactionSerializer, ProductSerializer, 
-    OrderCreateSerializer, OrderSerializer, FCMTokenSerializer # Added FCMTokenSerializer
+    OrderCreateSerializer, OrderSerializer, FCMTokenSerializer
 )
 from .payhero_utils import initiate_payhero_push
 
 # --- 1. FIREBASE INITIALIZATION ---
-# Initialize Firebase Admin SDK (Check if already initialized to prevent errors on auto-reload)
 if not firebase_admin._apps:
-    # Option A: Check for Environment Variable (Production)
     firebase_creds_env = os.environ.get('FIREBASE_CREDENTIALS')
     
     if firebase_creds_env:
-        # Load from the string variable
         cred_dict = json.loads(firebase_creds_env)
         cred = credentials.Certificate(cred_dict)
-    
-    # Option B: Fallback to local file (Development)
     elif os.path.exists("serviceAccountKey.json"):
         cred = credentials.Certificate("serviceAccountKey.json")
-    
     else:
         print("WARNING: Firebase credentials not found. Notifications will fail.")
         cred = None
@@ -48,22 +40,35 @@ if not firebase_admin._apps:
         initialize_app(cred)
 
 def send_fcm_notification(user, title, body, data=None):
-    """Helper function to send notification to a specific user"""
+    """
+    Helper function to send 'Data-Only' messages.
+    This prevents the OS from showing a default notification in the background,
+    allowing Flutter's AwesomeNotifications to handle UI 100% of the time.
+    """
     if not user.fcm_token:
         print(f"User {user.email} has no FCM token. Skipping notification.")
         return
 
+    # Ensure data is a dict
+    if data is None:
+        data = {}
+
+    # Add title and body to data payload so Flutter can read them
+    data['title'] = title
+    data['body'] = body
+    
+    # Ensure all data values are strings (FCM requirement)
+    data_payload = {k: str(v) for k, v in data.items()}
+
     try:
         message = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
-            data=data or {},
+            # REMOVED: notification=messaging.Notification(...) 
+            # We rely purely on 'data' to trigger the app
+            data=data_payload,
             token=user.fcm_token,
         )
         response = messaging.send(message)
-        print('Successfully sent message:', response)
+        print('Successfully sent Data message:', response)
     except Exception as e:
         print('Error sending message:', e)
 
@@ -80,7 +85,7 @@ class UpdateFCMTokenView(APIView):
             return Response({"message": "FCM token updated"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-# --- EXISTING VIEWS (Unchanged) ---
+# --- EXISTING VIEWS ---
 class GoalListCreateView(ListCreateAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = GoalSerializer 
@@ -181,7 +186,7 @@ class RepayView(APIView):
             return Response({"error": "Failed to initiate STK push."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"message": "Repayment STK push initiated. Please enter your PIN."}, status=status.HTTP_200_OK)    
 
-# --- 3. UPDATED CALLBACK VIEW (With Notification Triggers) ---
+# --- 3. CALLBACK VIEW ---
 class PaymentCallbackView(APIView):
     def post(self, request, *args, **kwargs):
         print(f"DEBUG: Raw PayHero Payload: {request.data}")
@@ -227,7 +232,6 @@ class PaymentCallbackView(APIView):
                     existing_transaction.status = 'failed'
                     existing_transaction.save()
                     
-                    # TRIGGER NOTIFICATION: FAILURE
                     send_fcm_notification(
                         existing_transaction.owner,
                         "Transaction Failed ⚠️",
@@ -269,7 +273,7 @@ class PaymentCallbackView(APIView):
                         user,
                         "Deposit Received! 💰",
                         f"Ksh. {amount_decimal:,.0f} has been deposited successfully and added to '{goal.name}'.",
-                        data={"type": "deposit", "goal_id": str(goal.id)}
+                        data={"type": "deposit", "goal_id": str(goal.id), "amount": str(amount_decimal), "goal_name": goal.name}
                     )
                     print(f"Successfully processed deposit for goal {goal.id}")
 
@@ -322,7 +326,6 @@ class PaymentCallbackView(APIView):
         except Exception as e:
             print(f"Forwarding error: {e}")
 
-# ... Other Views (TransactionListView, etc) remain unchanged ...
 class TransactionListView(ListAPIView):
     serializer_class = TransactionSerializer
     permission_classes = [IsAuthenticated]
