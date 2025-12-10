@@ -268,7 +268,7 @@ class PaymentCallbackView(APIView):
                     send_fcm_notification(
                         user,
                         "Deposit Received! 💰",
-                        f"KES {amount_decimal:,.0f} has been added to '{goal.name}'.",
+                        f"Ksh. {amount_decimal:,.0f} has been deposited successfully and added to '{goal.name}'.",
                         data={"type": "deposit", "goal_id": str(goal.id)}
                     )
                     print(f"Successfully processed deposit for goal {goal.id}")
@@ -305,7 +305,7 @@ class PaymentCallbackView(APIView):
                     send_fcm_notification(
                         user,
                         "Repayment Confirmed! ✅",
-                        f"KES {amount_decimal:,.0f} received for {order.product.name}.",
+                        f"Ksh. {amount_decimal:,.0f} received for repayment of {order.product.name}.",
                         data={"type": "repayment", "order_id": str(order.id)}
                     )
                     print(f"Successfully processed repayment for order {order.id}")
