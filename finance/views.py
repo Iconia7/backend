@@ -42,28 +42,21 @@ if not firebase_admin._apps:
 def send_fcm_notification(user, title, body, data=None):
     """
     Helper function to send 'Data-Only' messages.
-    This prevents the OS from showing a default notification in the background,
-    allowing Flutter's AwesomeNotifications to handle UI 100% of the time.
     """
     if not user.fcm_token:
         print(f"User {user.email} has no FCM token. Skipping notification.")
         return
 
-    # Ensure data is a dict
     if data is None:
         data = {}
 
-    # Add title and body to data payload so Flutter can read them
     data['title'] = title
     data['body'] = body
     
-    # Ensure all data values are strings (FCM requirement)
     data_payload = {k: str(v) for k, v in data.items()}
 
     try:
         message = messaging.Message(
-            # REMOVED: notification=messaging.Notification(...) 
-            # We rely purely on 'data' to trigger the app
             data=data_payload,
             token=user.fcm_token,
         )
@@ -337,6 +330,7 @@ class ProductListView(ListAPIView):
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated]
 
+# --- 4. UPDATED ORDER CREATE VIEW (Smart Deduction) ---
 class OrderCreateView(CreateAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = OrderCreateSerializer 
@@ -348,6 +342,14 @@ class OrderCreateView(CreateAPIView):
         product_id = input_serializer.validated_data['product_id']
         product = Product.objects.get(id=product_id)
         user = request.user
+        
+        # New optional fields from frontend: support both single ID or multiple IDs
+        specific_goal_id = request.data.get('goal_id') 
+        specific_goal_ids = request.data.get('goal_ids', [])
+
+        # Normalize specific_goal_id into the list if present
+        if specific_goal_id and not specific_goal_ids:
+            specific_goal_ids = [specific_goal_id]
 
         if user.koin_score < product.required_koin_score:
             raise ValidationError("Your Koin Score is not high enough to unlock this item.")
@@ -358,27 +360,56 @@ class OrderCreateView(CreateAPIView):
         down_payment = product.price * Decimal('0.25')
 
         with transaction.atomic():
-            total_savings = Goal.objects.filter(owner=user).aggregate(Sum('current_amount'))['current_amount__sum'] or Decimal('0.00')
-
-            if total_savings < down_payment:
-                shortfall = down_payment - total_savings
-                raise ValidationError(f"Insufficient savings. Down payment is KES {down_payment:,.2f}. You need KES {shortfall:,.2f} more.")
-
-            remaining_to_deduct = down_payment
-            user_goals = Goal.objects.filter(owner=user, current_amount__gt=0).order_by('created_at')
-
-            for goal in user_goals:
-                if remaining_to_deduct <= 0:
-                    break
+            # STRATEGY A: Specific Goals Deduction (Multi-select or Single)
+            if specific_goal_ids:
+                # Fetch only the selected goals belonging to user
+                selected_goals = Goal.objects.filter(id__in=specific_goal_ids, owner=user).order_by('created_at')
                 
-                if goal.current_amount >= remaining_to_deduct:
-                    goal.current_amount -= remaining_to_deduct
-                    goal.save()
-                    remaining_to_deduct = 0
-                else:
-                    remaining_to_deduct -= goal.current_amount
-                    goal.current_amount = Decimal('0.00')
-                    goal.save()
+                # Check total funds in selected goals
+                total_selected_savings = selected_goals.aggregate(Sum('current_amount'))['current_amount__sum'] or Decimal('0.00')
+                
+                if total_selected_savings < down_payment:
+                    shortfall = down_payment - total_selected_savings
+                    raise ValidationError(f"Selected goals have insufficient funds. Total selected: KES {total_selected_savings:,.2f}. Required: KES {down_payment:,.2f}. Shortfall: KES {shortfall:,.2f}.")
+
+                remaining_to_deduct = down_payment
+                
+                for goal in selected_goals:
+                    if remaining_to_deduct <= 0:
+                        break
+                    
+                    if goal.current_amount >= remaining_to_deduct:
+                        goal.current_amount -= remaining_to_deduct
+                        goal.save()
+                        remaining_to_deduct = 0
+                    else:
+                        remaining_to_deduct -= goal.current_amount
+                        goal.current_amount = Decimal('0.00')
+                        goal.save()
+
+            # STRATEGY B: General Savings Deduction (The Old/Fallback UX)
+            else:
+                total_savings = Goal.objects.filter(owner=user).aggregate(Sum('current_amount'))['current_amount__sum'] or Decimal('0.00')
+
+                if total_savings < down_payment:
+                    shortfall = down_payment - total_savings
+                    raise ValidationError(f"Insufficient savings. Down payment is KES {down_payment:,.2f}. You need KES {shortfall:,.2f} more.")
+
+                remaining_to_deduct = down_payment
+                user_goals = Goal.objects.filter(owner=user, current_amount__gt=0).order_by('created_at')
+
+                for goal in user_goals:
+                    if remaining_to_deduct <= 0:
+                        break
+                    
+                    if goal.current_amount >= remaining_to_deduct:
+                        goal.current_amount -= remaining_to_deduct
+                        goal.save()
+                        remaining_to_deduct = 0
+                    else:
+                        remaining_to_deduct -= goal.current_amount
+                        goal.current_amount = Decimal('0.00')
+                        goal.save()
 
             amount_financed = product.price - down_payment
             order = Order.objects.create(
