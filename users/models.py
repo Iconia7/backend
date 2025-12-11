@@ -15,6 +15,10 @@ class User(AbstractUser):
 
     phone_number = models.CharField(max_length=15, unique=True, null=True, blank=True)
 
+    # NEW: Profile Picture Field
+    # Requires 'Pillow' library: pip install Pillow
+    profile_picture = models.ImageField(upload_to='profile_pics/', blank=True, null=True)
+
     # It will store the user's financial discipline score.
     koin_score = models.IntegerField(default=0)
     fcm_token = models.CharField(max_length=255, blank=True, null=True)

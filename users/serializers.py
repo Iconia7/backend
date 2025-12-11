@@ -4,9 +4,11 @@ from rest_framework import serializers
 from .models import User
 
 class UserSerializer(serializers.ModelSerializer):
+    profile_picture = serializers.SerializerMethodField()
     class Meta:
         model = User
-        fields = ['id', 'email', 'name', 'password', 'adm_no', 'phone_number','koin_score']
+        # Added 'profile_picture' to fields
+        fields = ['id', 'email', 'name', 'password', 'adm_no', 'phone_number','koin_score', 'profile_picture']
 
         extra_kwargs = {
             'password': {'write_only': True}, # Password should not be returned in API responses
@@ -27,11 +29,17 @@ class UserSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
     
+    def get_profile_picture(self, obj):
+        if obj.profile_picture:
+            # This ensures we get the full https://res.cloudinary... URL
+            return obj.profile_picture.url 
+        return None
+    
 class UserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        # We list ALL fields we want the app to receive back
-        fields = ['id', 'email', 'name', 'phone_number', 'koin_score'] 
+        # Added 'profile_picture' to fields so it can be updated
+        fields = ['id', 'email', 'name', 'phone_number', 'koin_score', 'profile_picture'] 
         
         # We specify which ones are strictly NOT editable
         read_only_fields = ['id', 'email', 'koin_score'] 
@@ -39,4 +47,4 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     def validate_phone_number(self, value):
         if value and len(value) < 10:
              raise serializers.ValidationError("Phone number is too short.")
-        return value  
+        return value

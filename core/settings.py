@@ -29,6 +29,8 @@ ALLOWED_HOSTS = ['backend-fj0v.onrender.com']
 INSTALLED_APPS = [
     'users',
     'rest_framework',
+    'cloudinary_storage', # Add this
+    'cloudinary',
     'corsheaders',
     'finance',
     'django.contrib.admin',
@@ -107,6 +109,18 @@ LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME', 'your_cloud_name'),
+    'API_KEY': os.environ.get('CLOUDINARY_API_KEY', 'your_api_key'),
+    'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET', 'your_api_secret'),
+}
+
+# 3. Tell Django to use Cloudinary for Media
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 
 
 # Static files (CSS, JavaScript, Images)

@@ -3,6 +3,8 @@
 # 1. Import RetrieveUpdateAPIView
 from rest_framework.generics import CreateAPIView, RetrieveUpdateAPIView 
 from rest_framework.permissions import IsAuthenticated 
+# Import Parsers for File Uploads
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from .models import User
 # 2. Import the new Update Serializer
 from .serializers import UserSerializer, UserUpdateSerializer 
@@ -14,8 +16,10 @@ class RegisterView(CreateAPIView):
 # 3. Change class to RetrieveUpdateAPIView so it handles PATCH requests
 class MeView(RetrieveUpdateAPIView): 
     queryset = User.objects.all()
-    # We define get_serializer_class instead of setting serializer_class directly
     permission_classes = [IsAuthenticated] 
+    
+    # NEW: Add parsers to handle both JSON and File Uploads (Multipart)
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     # 4. Add this logic to swap serializers
     def get_serializer_class(self):
