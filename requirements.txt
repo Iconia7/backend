@@ -19,3 +19,4 @@ gunicorn
 firebase-admin
 cloudinary
 django-cloudinary-storage
+Pillow
