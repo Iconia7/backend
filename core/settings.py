@@ -122,6 +122,16 @@ CLOUDINARY_STORAGE = {
 # 3. Tell Django to use Cloudinary for Media
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 
+STORAGES = {
+    "default": {
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+    },
+    # ✅ USE THIS (Standard Storage - Reliable):
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
