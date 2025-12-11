@@ -128,7 +128,7 @@ STORAGES = {
     },
     # ✅ USE THIS (Standard Storage - Reliable):
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
 
@@ -136,7 +136,7 @@ STORAGES = {
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage' # <-- THIS IS REQUIRED
+STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage' # <-- THIS IS REQUIRED
 
 
 # Default primary key field type
